@@ -6,8 +6,10 @@ using Jellyfin.Data.Enums;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Dto;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.MediaInfo;
 using MediaBrowser.Model.Querying;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Logging;
@@ -21,16 +23,22 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
 {
     private readonly IDtoService _dtoService;
     private readonly JfresolveManager _manager;
+    private readonly ILibraryManager _libraryManager;
+    private readonly IUserManager _userManager;
     private readonly ILogger<SearchActionFilter> _log;
 
     public SearchActionFilter(
         IDtoService dtoService,
         JfresolveManager manager,
+        ILibraryManager libraryManager,
+        IUserManager userManager,
         ILogger<SearchActionFilter> log
     )
     {
         _dtoService = dtoService;
         _manager = manager;
+        _libraryManager = libraryManager;
+        _userManager = userManager;
         _log = log;
     }
 
@@ -76,32 +84,130 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
         ctx.TryGetActionArgument("startIndex", out var start, 0);
         ctx.TryGetActionArgument("limit", out var limit, 25);
 
-        // Search TMDB for all requested types
-        var baseItems = await SearchTmdbAsync(searchTerm, requestedTypes);
+        // Call next() first to let Jellyfin perform the standard local search
+        var executedContext = await next();
 
-        _log.LogInformation(
-            "Jfresolve: Intercepted /Items search \"{Query}\" types=[{Types}] start={Start} limit={Limit} results={Results}",
-            searchTerm,
-            string.Join(",", requestedTypes),
-            start,
-            limit,
-            baseItems.Count
-        );
-
-        // Convert BaseItems to DTOs (similar to Gelato's ConvertMetasToDtos)
-        var dtos = ConvertBaseItemsToDtos(baseItems);
-
-        // Apply pagination
-        var paged = dtos.Skip(start).Take(limit).ToArray();
-
-        // Return search results
-        ctx.Result = new OkObjectResult(
-            new QueryResult<BaseItemDto>
+        // Intercept the result and merge TMDB results if appropriate
+        if (executedContext.Result is OkObjectResult okResult && okResult.Value is QueryResult<BaseItemDto> localResults)
+        {
+            // Permission Check: Verify if user has access to jfresolve libraries
+            if (!UserHasAccessToJfresolve(executedContext.HttpContext))
             {
-                Items = paged,
-                TotalRecordCount = dtos.Count
+                _log.LogDebug("Jfresolve: User does not have access to any jfresolve library, skipping TMDB search");
+                return;
             }
-        );
+
+            // Search TMDB for all requested types
+            var baseItems = await SearchTmdbAsync(searchTerm, requestedTypes);
+
+            if (baseItems.Count > 0)
+            {
+                _log.LogInformation(
+                    "Jfresolve: Intercepted /Items search \"{Query}\" types=[{Types}] start={Start} limit={Limit} results={Results}. Merging with {Local} local results.",
+                    searchTerm,
+                    string.Join(",", requestedTypes),
+                    start,
+                    limit,
+                    baseItems.Count,
+                    localResults.TotalRecordCount
+                );
+
+                // Convert BaseItems to DTOs
+                var tmdbDtos = ConvertBaseItemsToDtos(baseItems);
+
+                // Merge: Local results first, then TMDB results
+                // Careful with pagination: Jellyfin already applied start/limit to localResults.Items
+                var localTotal = localResults.TotalRecordCount;
+                var tmdbTotal = tmdbDtos.Count;
+
+                // Update the total record count
+                localResults.TotalRecordCount = localTotal + tmdbTotal;
+
+                var mergedList = new List<BaseItemDto>();
+                
+                // Add local items that were already returned by Jellyfin (which respects start/limit)
+                mergedList.AddRange(localResults.Items);
+
+                // Calculate how many more items we need to fulfill the 'limit'
+                var remainingLimit = limit - mergedList.Count;
+                if (remainingLimit > 0)
+                {
+                    // Calculate where to start in TMDB results
+                    // If start < localTotal, we take TMDB results from the beginning (index 0)
+                    // If start >= localTotal, we skip the items covered by the local results
+                    var tmdbStartOffset = Math.Max(0, start - localTotal);
+                    var tmdbItemsToTake = tmdbDtos.Skip(tmdbStartOffset).Take(remainingLimit);
+                    mergedList.AddRange(tmdbItemsToTake);
+                }
+
+                // Update the result with merged and correctly paged items
+                localResults.Items = mergedList.ToArray();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Checks if the current user has access to at least one of the libraries managed by the plugin.
+    /// </summary>
+    private bool UserHasAccessToJfresolve(HttpContext httpContext)
+    {
+        try
+        {
+            // Get user from HttpContext items (standard Jellyfin pattern)
+            var user = httpContext.Items["User"] as MediaBrowser.Controller.Entities.User;
+            
+            // Fallback: look up by token if possible
+            if (user == null)
+            {
+                var token = httpContext.Request.Headers["X-Emby-Token"].FirstOrDefault();
+                if (!string.IsNullOrEmpty(token))
+                {
+                    user = _userManager.Users.FirstOrDefault(u => u.AuthenticationToken == token);
+                }
+            }
+
+            if (user == null) return false;
+
+            // Administrators always have access
+            if (user.Policy.IsAdministrator) return true;
+
+            // Get configured paths that could be used for search results
+            var config = JfresolvePlugin.Instance?.Configuration;
+            if (config == null) return false;
+
+            var paths = new List<string>();
+            if (config.PathMode == Configuration.PathConfigMode.Simple)
+            {
+                if (!string.IsNullOrWhiteSpace(config.MoviePath)) paths.Add(config.MoviePath);
+                if (!string.IsNullOrWhiteSpace(config.SeriesPath)) paths.Add(config.SeriesPath);
+                if (config.EnableAnimeFolder && !string.IsNullOrWhiteSpace(config.AnimePath)) paths.Add(config.AnimePath);
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(config.MovieSearchPath)) paths.Add(config.MovieSearchPath);
+                if (!string.IsNullOrWhiteSpace(config.SeriesSearchPath)) paths.Add(config.SeriesSearchPath);
+                if (config.EnableAnimeFolderAdvanced && !string.IsNullOrWhiteSpace(config.AnimeSearchPath)) paths.Add(config.AnimeSearchPath);
+            }
+
+            if (paths.Count == 0) return true;
+
+            // Verify if any of these paths are within libraries visible to the user
+            foreach (var path in paths)
+            {
+                var folder = _manager.TryGetFolder(path);
+                if (folder != null && folder.IsVisible(user))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Jfresolve: Error checking user permissions in search filter");
+            return false;
+        }
     }
 
     /// <summary>
