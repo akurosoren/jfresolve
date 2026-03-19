@@ -124,33 +124,64 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
                 // Convert BaseItems to DTOs
                 var tmdbDtos = ConvertBaseItemsToDtos(baseItems);
 
-                // Merge: Local results first, then TMDB results
-                // Careful with pagination: Jellyfin already applied start/limit to localResults.Items
-                var localTotal = localResults.TotalRecordCount;
-                var tmdbTotal = tmdbDtos.Count;
-
-                // Update the total record count
-                localResults.TotalRecordCount = localTotal + tmdbTotal;
-
-                var mergedList = new List<BaseItemDto>();
-                
-                // Add local items that were already returned by Jellyfin (which respects start/limit)
-                mergedList.AddRange(localResults.Items);
-
-                // Calculate how many more items we need to fulfill the 'limit'
-                var remainingLimit = limit - mergedList.Count;
-                if (remainingLimit > 0)
+                // Deduplicate: Remove TMDB results that already exist in local results
+                // Collect provider IDs from local results for fast lookup
+                var localProviderIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var localItem in localResults.Items)
                 {
-                    // Calculate where to start in TMDB results
-                    // If start < localTotal, we take TMDB results from the beginning (index 0)
-                    // If start >= localTotal, we skip the items covered by the local results
-                    var tmdbStartOffset = Math.Max(0, start - localTotal);
-                    var tmdbItemsToTake = tmdbDtos.Skip(tmdbStartOffset).Take(remainingLimit);
-                    mergedList.AddRange(tmdbItemsToTake);
+                    if (localItem.ProviderIds != null)
+                    {
+                        if (localItem.ProviderIds.TryGetValue("Tmdb", out var tmdbId) && !string.IsNullOrEmpty(tmdbId))
+                            localProviderIds.Add("tmdb:" + tmdbId);
+                        if (localItem.ProviderIds.TryGetValue("Imdb", out var imdbId) && !string.IsNullOrEmpty(imdbId))
+                            localProviderIds.Add("imdb:" + imdbId);
+                    }
                 }
 
-                // Update the result with merged and correctly paged items
-                localResults.Items = mergedList.ToArray();
+                // Filter out TMDB results that match local items
+                var filteredTmdbDtos = tmdbDtos.Where(dto =>
+                {
+                    if (dto.ProviderIds == null) return true;
+                    if (dto.ProviderIds.TryGetValue("Tmdb", out var tmdbId) && !string.IsNullOrEmpty(tmdbId)
+                        && localProviderIds.Contains("tmdb:" + tmdbId))
+                        return false;
+                    if (dto.ProviderIds.TryGetValue("Imdb", out var imdbId) && !string.IsNullOrEmpty(imdbId)
+                        && localProviderIds.Contains("imdb:" + imdbId))
+                        return false;
+                    return true;
+                }).ToList();
+
+                _log.LogDebug(
+                    "Jfresolve: Deduplication removed {Removed} TMDB results already present locally",
+                    tmdbDtos.Count - filteredTmdbDtos.Count
+                );
+
+                if (filteredTmdbDtos.Count > 0)
+                {
+                    // Merge: Local results first, then TMDB results
+                    var localTotal = localResults.TotalRecordCount;
+                    var tmdbTotal = filteredTmdbDtos.Count;
+
+                    // Update the total record count
+                    localResults.TotalRecordCount = localTotal + tmdbTotal;
+
+                    var mergedList = new List<BaseItemDto>();
+                    
+                    // Add local items that were already returned by Jellyfin (which respects start/limit)
+                    mergedList.AddRange(localResults.Items);
+
+                    // Calculate how many more items we need to fulfill the 'limit'
+                    var remainingLimit = limit - mergedList.Count;
+                    if (remainingLimit > 0)
+                    {
+                        var tmdbStartOffset = Math.Max(0, start - localTotal);
+                        var tmdbItemsToTake = filteredTmdbDtos.Skip(tmdbStartOffset).Take(remainingLimit);
+                        mergedList.AddRange(tmdbItemsToTake);
+                    }
+
+                    // Update the result with merged and correctly paged items
+                    localResults.Items = mergedList.ToArray();
+                }
 
                 _log.LogInformation(
                     "Jfresolve: Merged search results. Total: {Total}, Displayed: {Displayed}",
@@ -170,6 +201,7 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
 
     /// <summary>
     /// Checks if the current user has access to at least one of the libraries managed by the plugin.
+    /// Uses collection folder visibility checks via ILibraryManager.
     /// </summary>
     private bool UserHasAccessToJfresolve(HttpContext httpContext)
     {
@@ -181,10 +213,17 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
                 ?.Value;
 
             if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+            {
+                _log.LogDebug("Jfresolve: Could not get userId from claims");
                 return false;
+            }
 
             var user = _userManager.GetUserById(userId);
-            if (user == null) return false;
+            if (user == null)
+            {
+                _log.LogDebug("Jfresolve: User not found for id {UserId}", userId);
+                return false;
+            }
 
             // Get configured paths that could be used for search results
             var config = JfresolvePlugin.Instance?.Configuration;
@@ -206,17 +245,43 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
 
             if (paths.Count == 0) return true;
 
-            // Verify if any of these paths are within libraries visible to the user
-            // Note: Admins can see all folders, so this check inherently grants them access
-            foreach (var path in paths)
+            // Get all root collection folders from the library manager
+            var allCollectionFolders = _libraryManager.GetUserRootFolder().Children.OfType<Folder>().ToList();
+            
+            _log.LogDebug("Jfresolve: Found {Count} collection folders, checking access for user {User}",
+                allCollectionFolders.Count, user.Username);
+
+            // For each configured plugin path, find the matching collection folder
+            // and check if the user can see it
+            foreach (var pluginPath in paths)
             {
-                var folder = _manager.TryGetFolder(path);
-                if (folder != null && folder.IsVisible(user))
+                var normalizedPluginPath = pluginPath.TrimEnd('/', '\\');
+                
+                foreach (var collectionFolder in allCollectionFolders)
                 {
-                    return true;
+                    var folderPath = collectionFolder.Path?.TrimEnd('/', '\\') ?? "";
+                    
+                    // Check if the plugin's path matches or is within this collection folder
+                    if (normalizedPluginPath.StartsWith(folderPath, StringComparison.OrdinalIgnoreCase)
+                        || folderPath.StartsWith(normalizedPluginPath, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Use Jellyfin's built-in IsVisible to check user access
+                        if (collectionFolder.IsVisible(user))
+                        {
+                            _log.LogDebug("Jfresolve: User {User} has access to folder {Folder} (path: {Path})",
+                                user.Username, collectionFolder.Name, folderPath);
+                            return true;
+                        }
+                        else
+                        {
+                            _log.LogDebug("Jfresolve: User {User} does NOT have access to folder {Folder} (path: {Path})",
+                                user.Username, collectionFolder.Name, folderPath);
+                        }
+                    }
                 }
             }
 
+            _log.LogDebug("Jfresolve: User {User} does not have access to any jfresolve library", user.Username);
             return false;
         }
         catch (Exception ex)
