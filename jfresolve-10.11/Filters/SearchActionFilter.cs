@@ -94,7 +94,7 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
         );
 
         // Intercept the result and merge TMDB results if appropriate
-        if (executedContext.Result is OkObjectResult okResult && okResult.Value is QueryResult<BaseItemDto> localResults)
+        if (executedContext.Result is ObjectResult objResult && objResult.Value is QueryResult<BaseItemDto> localResults)
         {
             // Permission Check: Verify if user has access to jfresolve libraries
             var hasAccess = UserHasAccessToJfresolve(executedContext.HttpContext);
@@ -162,7 +162,7 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
         else
         {
             _log.LogWarning(
-                "Jfresolve: Could not intercept search result. Result is not OkObjectResult<QueryResult<BaseItemDto>>. Actual: {Type}",
+                "Jfresolve: Could not intercept search result. Result is not ObjectResult<QueryResult<BaseItemDto>>. Actual: {Type}",
                 executedContext.Result?.GetType().FullName ?? "null"
             );
         }
