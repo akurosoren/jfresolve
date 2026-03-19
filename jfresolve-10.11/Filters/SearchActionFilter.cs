@@ -88,11 +88,19 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
         // Call next() first to let Jellyfin perform the standard local search
         var executedContext = await next();
 
+        _log.LogDebug(
+            "Jfresolve: Search executed. Result type: {ResultType}",
+            executedContext.Result?.GetType().FullName ?? "null"
+        );
+
         // Intercept the result and merge TMDB results if appropriate
         if (executedContext.Result is OkObjectResult okResult && okResult.Value is QueryResult<BaseItemDto> localResults)
         {
             // Permission Check: Verify if user has access to jfresolve libraries
-            if (!UserHasAccessToJfresolve(executedContext.HttpContext))
+            var hasAccess = UserHasAccessToJfresolve(executedContext.HttpContext);
+            _log.LogDebug("Jfresolve: User has access to jfresolve libraries: {HasAccess}", hasAccess);
+
+            if (!hasAccess)
             {
                 _log.LogDebug("Jfresolve: User does not have access to any jfresolve library, skipping TMDB search");
                 return;
@@ -101,18 +109,18 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
             // Search TMDB for all requested types
             var baseItems = await SearchTmdbAsync(searchTerm, requestedTypes);
 
+            _log.LogInformation(
+                "Jfresolve: Intercepted /Items search \"{Query}\" types=[{Types}] start={Start} limit={Limit} tmdbResults={Results} localResults={Local}",
+                searchTerm,
+                string.Join(",", requestedTypes),
+                start,
+                limit,
+                baseItems.Count,
+                localResults.TotalRecordCount
+            );
+
             if (baseItems.Count > 0)
             {
-                _log.LogInformation(
-                    "Jfresolve: Intercepted /Items search \"{Query}\" types=[{Types}] start={Start} limit={Limit} results={Results}. Merging with {Local} local results.",
-                    searchTerm,
-                    string.Join(",", requestedTypes),
-                    start,
-                    limit,
-                    baseItems.Count,
-                    localResults.TotalRecordCount
-                );
-
                 // Convert BaseItems to DTOs
                 var tmdbDtos = ConvertBaseItemsToDtos(baseItems);
 
@@ -143,7 +151,20 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
 
                 // Update the result with merged and correctly paged items
                 localResults.Items = mergedList.ToArray();
+
+                _log.LogInformation(
+                    "Jfresolve: Merged search results. Total: {Total}, Displayed: {Displayed}",
+                    localResults.TotalRecordCount,
+                    localResults.Items.Count
+                );
             }
+        }
+        else
+        {
+            _log.LogWarning(
+                "Jfresolve: Could not intercept search result. Result is not OkObjectResult<QueryResult<BaseItemDto>>. Actual: {Type}",
+                executedContext.Result?.GetType().FullName ?? "null"
+            );
         }
     }
 
