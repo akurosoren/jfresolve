@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/vicking20/jfresolve/main/jfresolve.png" alt="Jfresolve Logo" width="128" height="128">
+  <img src="https://raw.githubusercontent.com/akurosoren/jfresolve/main/jfresolve.png" alt="Jfresolve Logo" width="128" height="128">
 </p>
 
 <h1 align="center">Jfresolve - Jellyfin Plugin</h1>
@@ -13,7 +13,7 @@ A Jellyfin plugin that integrates external streaming sources (Stremio addons) fr
   <a href="https://discord.gg/hPz3qn72Ue" target="_blank">
     <img src="https://img.shields.io/badge/Chat%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord">
   </a>
-  <a href="https://raw.githubusercontent.com/vicking20/jfresolve/refs/heads/main/repository.json" target="_blank">
+  <a href="https://raw.githubusercontent.com/akurosoren/jfresolve/refs/heads/main/repository.json" target="_blank">
     <img src="https://img.shields.io/badge/Add%20to%20Jellyfin-13B5EA?style=for-the-badge&logo=jellyfin&logoColor=white" alt="Jellyfin Repo">
   </a>
 </p>
@@ -58,7 +58,7 @@ Similar project: If you aren't interested in using the plugin, you can instead u
 
 ## Installation
 
-1. Add the link to the plugin to your Jellyfin server's plugin repository: `https://raw.githubusercontent.com/vicking20/jfresolve/refs/heads/main/repository.json`
+1. Add the link to the plugin to your Jellyfin server's plugin repository: `https://raw.githubusercontent.com/akurosoren/jfresolve/refs/heads/main/repository.json`
 2. Install and configure your plugin. Tested with Torrentio, TorrentioRD, Aiostreams, MediaFusion. Your plugin needs to have your real debrid key setup.
 3. During the first time configuration or after adding a new library path, after saving your settings, you should restart Jellyfin, then trigger a library refresh for changes to take effect.
 4. If you have used an older version of Jfresolve older than 1.0.0.3, you need to uninstall the older version.

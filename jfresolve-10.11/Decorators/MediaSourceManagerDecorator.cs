@@ -1,5 +1,4 @@
 #nullable disable
-#nullable disable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -333,7 +332,7 @@ public class MediaSourceManagerDecorator : IMediaSourceManager
 
     public IReadOnlyList<MediaAttachment> GetMediaAttachments(MediaAttachmentQuery query) => _inner.GetMediaAttachments(query);
 
-    public Task<MediaSourceInfo> GetMediaSource(BaseItem item, string mediaSourceId, string? liveStreamId, bool enablePathSubstitution, CancellationToken cancellationToken)
+    public Task<MediaSourceInfo> GetMediaSource(BaseItem item, string mediaSourceId, string liveStreamId, bool enablePathSubstitution, CancellationToken cancellationToken)
         => _inner.GetMediaSource(item, mediaSourceId, liveStreamId, enablePathSubstitution, cancellationToken);
 
     public Task<LiveStreamResponse> OpenLiveStream(LiveStreamRequest request, CancellationToken cancellationToken)
@@ -348,9 +347,9 @@ public class MediaSourceManagerDecorator : IMediaSourceManager
     public Task<Tuple<MediaSourceInfo, IDirectStreamProvider>> GetLiveStreamWithDirectStreamProvider(string id, CancellationToken cancellationToken)
         => _inner.GetLiveStreamWithDirectStreamProvider(id, cancellationToken);
 
-    public ILiveStream? GetLiveStreamInfo(string id) => _inner.GetLiveStreamInfo(id);
+    public ILiveStream GetLiveStreamInfo(string id) => _inner.GetLiveStreamInfo(id);
 
-    public ILiveStream? GetLiveStreamInfoByUniqueId(string uniqueId) => _inner.GetLiveStreamInfoByUniqueId(uniqueId);
+    public ILiveStream GetLiveStreamInfoByUniqueId(string uniqueId) => _inner.GetLiveStreamInfoByUniqueId(uniqueId);
 
     public Task<IReadOnlyList<MediaSourceInfo>> GetRecordingStreamMediaSources(ActiveRecordingInfo info, CancellationToken cancellationToken)
         => _inner.GetRecordingStreamMediaSources(info, cancellationToken);
@@ -367,6 +366,6 @@ public class MediaSourceManagerDecorator : IMediaSourceManager
     public void SetDefaultAudioAndSubtitleStreamIndices(BaseItem item, MediaSourceInfo source, User user)
         => _inner.SetDefaultAudioAndSubtitleStreamIndices(item, source, user);
 
-    public Task AddMediaInfoWithProbe(MediaSourceInfo mediaSource, bool isAudio, string? cacheKey, bool addProbeDelay, bool isLiveStream, CancellationToken cancellationToken)
+    public Task AddMediaInfoWithProbe(MediaSourceInfo mediaSource, bool isAudio, string cacheKey, bool addProbeDelay, bool isLiveStream, CancellationToken cancellationToken)
         => _inner.AddMediaInfoWithProbe(mediaSource, isAudio, cacheKey, addProbeDelay, isLiveStream, cancellationToken);
 }

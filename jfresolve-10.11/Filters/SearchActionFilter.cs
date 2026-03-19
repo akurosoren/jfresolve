@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Model.Dto;
@@ -153,23 +154,16 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
     {
         try
         {
-            // Get user from HttpContext items (standard Jellyfin pattern)
-            var user = httpContext.Items["User"] as MediaBrowser.Controller.Entities.User;
-            
-            // Fallback: look up by token if possible
-            if (user == null)
-            {
-                var token = httpContext.Request.Headers["X-Emby-Token"].FirstOrDefault();
-                if (!string.IsNullOrEmpty(token))
-                {
-                    user = _userManager.Users.FirstOrDefault(u => u.AuthenticationToken == token);
-                }
-            }
+            // Get userId from JWT claims (same pattern as Common.TryGetUserId)
+            var userIdStr = httpContext.User.Claims
+                .FirstOrDefault(c => c.Type is "UserId" or "Jellyfin-UserId")
+                ?.Value;
 
+            if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+                return false;
+
+            var user = _userManager.GetUserById(userId);
             if (user == null) return false;
-
-            // Administrators always have access
-            if (user.Policy.IsAdministrator) return true;
 
             // Get configured paths that could be used for search results
             var config = JfresolvePlugin.Instance?.Configuration;
@@ -192,6 +186,7 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
             if (paths.Count == 0) return true;
 
             // Verify if any of these paths are within libraries visible to the user
+            // Note: Admins can see all folders, so this check inherently grants them access
             foreach (var path in paths)
             {
                 var folder = _manager.TryGetFolder(path);

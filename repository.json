@@ -6,8 +6,16 @@
     "guid": "506F18B8-5DAD-4CD3-B9A0-F7ED933E9939",
     "description": "Stream and resolve external media sources directly through Jellyfin.",
     "overview": "Simplify external playback — Jfresolve automatically finds and streams external media from stremio.",
-    "imageUrl": "https://raw.githubusercontent.com/vicking20/jfresolve/main/jfresolve.png",
+    "imageUrl": "https://raw.githubusercontent.com/akurosoren/jfresolve/main/jfresolve.png",
     "versions": [
+      {
+        "version": "1.0.0.14",
+        "changelog": "Fusion des résultats de recherche locaux et TMDB. Ajout de restrictions de bibliothèque par utilisateur. Correction de la pagination des résultats fusionnés.",
+        "sourceUrl": "https://github.com/akurosoren/jfresolve/releases/download/10.11.1.0.0.14/jfresolve.zip",
+        "checksum": "f02abc9a9008096445fb765f00f3f564",
+        "targetAbi": "10.11.0.0",
+        "timestamp": "2026-03-19T22:00:00Z"
+      },
       {
         "version": "1.0.0.13",
         "changelog": "Fixed plugin image not loading: Added embedded resource for jfresolve.png and created Image endpoint to serve it. Added route handling for both /Plugins/Jfresolve/Image and /Plugins/{guid}/{version}/Image patterns. Thanks to @ dennisstorm-hass",
