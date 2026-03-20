@@ -121,46 +121,73 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
 
             if (baseItems.Count > 0)
             {
-                // Convert BaseItems to DTOs
-                var tmdbDtos = ConvertBaseItemsToDtos(baseItems);
+                // Get user for visibility checks
+                var userIdStr = executedContext.HttpContext.User.Claims.FirstOrDefault(c => c.Type is "UserId" or "Jellyfin-UserId")?.Value;
+                Guid.TryParse(userIdStr ?? "", out var userId);
+                var user = _userManager.GetUserById(userId);
 
-                // Deduplicate: Remove TMDB results that already exist in local results
-                // Collect provider IDs from local results for fast lookup
-                var localProviderIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var localItem in localResults.Items)
+                // Deduplicate: Query ILibraryManager to see if the item already exists LOCALLY
+                var initialCount = baseItems.Count;
+                var filteredBaseItems = new List<BaseItem>();
+
+                foreach (var item in baseItems)
                 {
-                    if (localItem.ProviderIds != null)
+                    var providerIds = new Dictionary<string, string>();
+                    
+                    if (item.ProviderIds != null)
                     {
-                        if (localItem.ProviderIds.TryGetValue("Tmdb", out var tmdbId) && !string.IsNullOrEmpty(tmdbId))
-                            localProviderIds.Add("tmdb:" + tmdbId);
-                        if (localItem.ProviderIds.TryGetValue("Imdb", out var imdbId) && !string.IsNullOrEmpty(imdbId))
-                            localProviderIds.Add("imdb:" + imdbId);
+                        if (item.ProviderIds.TryGetValue("Tmdb", out var tmdbId) && !string.IsNullOrEmpty(tmdbId))
+                            providerIds["Tmdb"] = tmdbId;
+                        if (item.ProviderIds.TryGetValue("Imdb", out var imdbId) && !string.IsNullOrEmpty(imdbId))
+                            providerIds["Imdb"] = imdbId;
+                    }
+
+                    bool existsLocally = false;
+
+                    if (providerIds.Count > 0)
+                    {
+                        var query = new InternalItemsQuery
+                        {
+                            IncludeItemTypes = new[] { item.GetBaseItemKind() },
+                            HasAnyProviderId = providerIds,
+                            IsVirtualItem = false, // Only find real local items
+                            User = user // Apply user visibility filter
+                        };
+
+                        var existingItems = _libraryManager.GetItemList(query);
+                        
+                        // Ensure at least one existing item is NOT a jfresolve item
+                        foreach (var existingItem in existingItems)
+                        {
+                            if (existingItem.ProviderIds == null || !existingItem.ProviderIds.ContainsKey("Jfresolve"))
+                            {
+                                existsLocally = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!existsLocally)
+                    {
+                        filteredBaseItems.Add(item);
                     }
                 }
 
-                // Filter out TMDB results that match local items
-                var filteredTmdbDtos = tmdbDtos.Where(dto =>
-                {
-                    if (dto.ProviderIds == null) return true;
-                    if (dto.ProviderIds.TryGetValue("Tmdb", out var tmdbId) && !string.IsNullOrEmpty(tmdbId)
-                        && localProviderIds.Contains("tmdb:" + tmdbId))
-                        return false;
-                    if (dto.ProviderIds.TryGetValue("Imdb", out var imdbId) && !string.IsNullOrEmpty(imdbId)
-                        && localProviderIds.Contains("imdb:" + imdbId))
-                        return false;
-                    return true;
-                }).ToList();
+                baseItems = filteredBaseItems;
 
-                _log.LogDebug(
-                    "Jfresolve: Deduplication removed {Removed} TMDB results already present locally",
-                    tmdbDtos.Count - filteredTmdbDtos.Count
+                _log.LogWarning(
+                    "Jfresolve: Deduplication removed {Removed} TMDB results already present locally in the user's library",
+                    initialCount - baseItems.Count
                 );
 
-                if (filteredTmdbDtos.Count > 0)
+                if (baseItems.Count > 0)
                 {
+                    // Convert remaining BaseItems to DTOs
+                    var tmdbDtos = ConvertBaseItemsToDtos(baseItems);
+
                     // Merge: Local results first, then TMDB results
                     var localTotal = localResults.TotalRecordCount;
-                    var tmdbTotal = filteredTmdbDtos.Count;
+                    var tmdbTotal = tmdbDtos.Count;
 
                     // Update the total record count
                     localResults.TotalRecordCount = localTotal + tmdbTotal;
@@ -175,7 +202,7 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
                     if (remainingLimit > 0)
                     {
                         var tmdbStartOffset = Math.Max(0, start - localTotal);
-                        var tmdbItemsToTake = filteredTmdbDtos.Skip(tmdbStartOffset).Take(remainingLimit);
+                        var tmdbItemsToTake = tmdbDtos.Skip(tmdbStartOffset).Take(remainingLimit);
                         mergedList.AddRange(tmdbItemsToTake);
                     }
 
@@ -214,20 +241,20 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
 
             if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
             {
-                _log.LogDebug("Jfresolve: Could not get userId from claims");
-                return false;
+                _log.LogWarning("Jfresolve: Could not get userId from claims, granting access by default");
+                return true; // Fail open if we can't identify the user
             }
 
             var user = _userManager.GetUserById(userId);
             if (user == null)
             {
-                _log.LogDebug("Jfresolve: User not found for id {UserId}", userId);
-                return false;
+                _log.LogWarning("Jfresolve: User not found for id {UserId}, granting access by default", userId);
+                return true; // Fail open if user not found
             }
 
             // Get configured paths that could be used for search results
             var config = JfresolvePlugin.Instance?.Configuration;
-            if (config == null) return false;
+            if (config == null) return true;
 
             var paths = new List<string>();
             if (config.PathMode == Configuration.PathConfigMode.Simple)
@@ -245,49 +272,73 @@ public class SearchActionFilter : IAsyncActionFilter, IOrderedFilter
 
             if (paths.Count == 0) return true;
 
+            _log.LogWarning("Jfresolve: Checking access for user {User}. Plugin paths: [{Paths}]",
+                user.Username, string.Join(", ", paths));
+
             // Get all root collection folders from the library manager
             var allCollectionFolders = _libraryManager.GetUserRootFolder().Children.OfType<Folder>().ToList();
-            
-            _log.LogDebug("Jfresolve: Found {Count} collection folders, checking access for user {User}",
-                allCollectionFolders.Count, user.Username);
 
-            // For each configured plugin path, find the matching collection folder
-            // and check if the user can see it
-            foreach (var pluginPath in paths)
+            // For each collection folder, check if its PHYSICAL locations match plugin paths
+            foreach (var collectionFolder in allCollectionFolders)
             {
-                var normalizedPluginPath = pluginPath.TrimEnd('/', '\\');
+                // Get the real media paths (PhysicalLocations), not the virtual folder path
+                var physicalPaths = new List<string>();
                 
-                foreach (var collectionFolder in allCollectionFolders)
+                if (collectionFolder is MediaBrowser.Controller.Entities.CollectionFolder cf)
                 {
-                    var folderPath = collectionFolder.Path?.TrimEnd('/', '\\') ?? "";
-                    
-                    // Check if the plugin's path matches or is within this collection folder
-                    if (normalizedPluginPath.StartsWith(folderPath, StringComparison.OrdinalIgnoreCase)
-                        || folderPath.StartsWith(normalizedPluginPath, StringComparison.OrdinalIgnoreCase))
+                    // CollectionFolder has PhysicalLocations = the actual media directories
+                    physicalPaths.AddRange(cf.PhysicalLocations);
+                }
+                
+                // Fallback: also check children paths
+                if (physicalPaths.Count == 0)
+                {
+                    try
                     {
-                        // Use Jellyfin's built-in IsVisible to check user access
-                        if (collectionFolder.IsVisible(user))
+                        foreach (var child in collectionFolder.Children)
                         {
-                            _log.LogDebug("Jfresolve: User {User} has access to folder {Folder} (path: {Path})",
-                                user.Username, collectionFolder.Name, folderPath);
-                            return true;
+                            if (!string.IsNullOrEmpty(child.Path))
+                                physicalPaths.Add(child.Path);
                         }
-                        else
+                    }
+                    catch { /* ignore */ }
+                }
+
+                _log.LogWarning("Jfresolve: Collection '{Name}' physical paths: [{Paths}]",
+                    collectionFolder.Name, string.Join(", ", physicalPaths));
+
+                // Check if any plugin path matches any physical location
+                foreach (var pluginPath in paths)
+                {
+                    var normalizedPluginPath = pluginPath.Replace('\\', '/').TrimEnd('/');
+                    
+                    foreach (var fp in physicalPaths)
+                    {
+                        var normalizedFolderPath = fp.Replace('\\', '/').TrimEnd('/');
+                        
+                        if (normalizedPluginPath.Equals(normalizedFolderPath, StringComparison.OrdinalIgnoreCase)
+                            || normalizedPluginPath.StartsWith(normalizedFolderPath + "/", StringComparison.OrdinalIgnoreCase)
+                            || normalizedFolderPath.StartsWith(normalizedPluginPath + "/", StringComparison.OrdinalIgnoreCase))
                         {
-                            _log.LogDebug("Jfresolve: User {User} does NOT have access to folder {Folder} (path: {Path})",
-                                user.Username, collectionFolder.Name, folderPath);
+                            var isVisible = collectionFolder.IsVisible(user);
+                            _log.LogWarning(
+                                "Jfresolve: Path match! Plugin={PluginPath} <-> Folder={FolderName}({FolderPath}). IsVisible={IsVisible}",
+                                pluginPath, collectionFolder.Name, fp, isVisible);
+                            
+                            if (isVisible)
+                                return true;
                         }
                     }
                 }
             }
 
-            _log.LogDebug("Jfresolve: User {User} does not have access to any jfresolve library", user.Username);
+            _log.LogWarning("Jfresolve: User {User} does NOT have access to any jfresolve library (no path match or not visible)", user.Username);
             return false;
         }
         catch (Exception ex)
         {
-            _log.LogError(ex, "Jfresolve: Error checking user permissions in search filter");
-            return false;
+            _log.LogError(ex, "Jfresolve: Error checking user permissions in search filter, granting access by default");
+            return true; // Fail open on error
         }
     }
 

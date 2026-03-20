@@ -48,13 +48,14 @@ Similar project: If you aren't interested in using the plugin, you can instead u
 - **Status**: Not Actively Maintained
 - **Latest Release**: See [Releases](../../releases)
 
-### Recent Changes (v1.0.0.12+)
+### Recent Changes (v1.0.0.14+ Fork Updates)
 
-- **Jellyfin 10.11.6 Compatibility**: Fixed interface implementation issues with `IItemRepository.ReattachUserDataAsync` method
-- **Streaming Improvements**: Enhanced HTTP range request support (206 Partial Content) for FFmpeg seeking
-- **Stream Proxying**: Implemented proper stream proxying instead of redirects for better compatibility with Jellyfin 10.11.6
-- **Header Handling**: Fixed Content-Range header handling to prevent streaming errors
-- **NuGet Packages**: Updated to Jellyfin 10.11.6 packages for proper interface compatibility
+- **Search Results Merging**: Fixed search interception so TMDB results no longer overwrite local content. Local content is prioritized and displayed first.
+- **Robust Deduplication**: Implemented direct `ILibraryManager` querying to ensure that TMDB items already present in the user's local library do not appear as duplicates in search results.
+- **Library Access Control**: TMDB search results are now strictly filtered based on the current user's library access permissions. Users will only see TMDB results if they have access to the physical media folders configured in the plugin.
+- **Jellyfin 10.11.6 Compatibility**: Fixed interface implementation issues with `IItemRepository.ReattachUserDataAsync` method.
+- **Streaming Improvements**: Enhanced HTTP range request support (206 Partial Content) for FFmpeg seeking.
+- **Stream Proxying**: Implemented proper stream proxying instead of redirects for better compatibility with Jellyfin 10.11.6.
 
 ## Installation
 
