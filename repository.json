@@ -12,7 +12,7 @@
         "version": "1.0.0.14",
         "changelog": "Fusion des résultats de recherche locaux et TMDB. Ajout de restrictions de bibliothèque par utilisateur. Correction de la pagination des résultats fusionnés.",
         "sourceUrl": "https://github.com/akurosoren/jfresolve/releases/download/10.11.1.0.0.14/jfresolve.zip",
-        "checksum": "C41B45C90654F5AE7B1FD174184FA26B",
+        "checksum": "97E33C5B02159EB05404B9CAD9446A23",
         "targetAbi": "10.11.0.0",
         "timestamp": "2026-03-19T22:00:00Z"
       },
